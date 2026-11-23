@@ -40,17 +40,19 @@ namespace
 {
 const char* pinsInterface = "org.xfce.Docklike.Pins1";
 
-std::string find_taskbar(GDBusConnection* bus)
+std::string find_taskbar(GDBusConnection* bus, bool& absent)
 {
 	auto reply = g_dbus_connection_call_sync(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus",
 		"org.freedesktop.DBus", "ListNames", nullptr, G_VARIANT_TYPE("(as)"), G_DBUS_CALL_FLAGS_NONE, 500, nullptr, nullptr);
 	std::string name;
 	if (reply) {
+		absent = true;
 		GVariantIter* names;
 		g_variant_get(reply, "(as)", &names);
 		const char* item;
 		while (g_variant_iter_next(names, "&s", &item)) {
 			if (!g_str_has_prefix(item, "org.xfce.Docklike.Pins1.Instance")) continue;
+			absent = false;
 			if (!name.empty()) { name.clear(); break; } // Never pick an arbitrary taskbar.
 			name = item;
 		}
@@ -510,14 +512,26 @@ void Page::create_context_menu(GtkTreePath* path, GdkEvent* event)
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu), menuitem);
 
 	auto bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
-	const std::string destination = bus ? find_taskbar(bus) : "";
+	bool absent = false;
+	const std::string destination = bus ? find_taskbar(bus, absent) : "";
 	const std::string desktopId = m_selected_launcher->get_desktop_id();
 	auto state = destination.empty() ? nullptr : pins_call(bus, destination, "IsPinned", g_variant_new("(s)", desktopId.c_str()), nullptr);
 	gboolean pinned = FALSE;
 	if (state) g_variant_get(state, "(b)", &pinned);
 	menuitem = whiskermenu_image_menu_item_new(pinned ? "list-remove" : "list-add",
-		!state ? _("Taskbar pinning unavailable") : pinned ? _("Unpin from Taskbar") : _("Pin to Taskbar"));
-	gtk_widget_set_sensitive(menuitem, state != nullptr);
+		absent ? _("Add to Panel") : !state ? _("Taskbar pinning unavailable") : pinned ? _("Unpin from Taskbar") : _("Pin to Taskbar"));
+	gtk_widget_set_sensitive(menuitem, absent || state != nullptr);
+	if (absent) {
+		connect(menuitem, "activate", [desktopId](GtkMenuItem*) {
+			GError* error = nullptr;
+			auto connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &error);
+			const gchar* ids[] = {desktopId.c_str(), nullptr};
+			auto result = connection ? g_dbus_connection_call_sync(connection, "org.xfce.Panel", "/org/xfce/Panel", "org.xfce.Panel", "AddNewItem", g_variant_new("(s^as)", "launcher", ids), nullptr, G_DBUS_CALL_FLAGS_NONE, -1, nullptr, &error) : nullptr;
+			if (result) g_variant_unref(result);
+			else { xfce_dialog_show_error(nullptr, error, _("Unable to add launcher to panel.")); g_clear_error(&error); }
+			if (connection) g_object_unref(connection);
+		});
+	}
 	if (state) {
 		g_variant_unref(state);
 		connect(menuitem, "activate", [destination, desktopId, pinned](GtkMenuItem*) {
