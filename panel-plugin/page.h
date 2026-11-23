@@ -91,7 +91,6 @@ private:
 	void view_drag_end();
 	gboolean view_popup_menu_event();
 	void add_selected_to_desktop();
-	void add_selected_to_panel();
 	void edit_selected();
 	void create_context_menu(GtkTreePath* path, GdkEvent* event);
 	virtual void extend_context_menu(GtkWidget* menu);
